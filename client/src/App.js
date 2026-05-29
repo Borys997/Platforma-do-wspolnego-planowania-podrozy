@@ -34,8 +34,26 @@ const PlusIcon = () => (
 const ExtLinkIcon = () => (
   <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
 );
+const KeyIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"></path></svg>
+);
 
 function App() {
+  // Auth state
+  const [token, setToken] = useState(localStorage.getItem("tp_token") || null);
+  const [user, setUser] = useState(JSON.parse(localStorage.getItem("tp_user")) || null);
+  const [authMode, setAuthMode] = useState("login"); // login | register
+  const [authForm, setAuthForm] = useState({ username: "", password: "" });
+  const [authError, setAuthError] = useState("");
+
+  // Rooms state
+  const [rooms, setRooms] = useState([]);
+  const [selectedRoom, setSelectedRoom] = useState(null);
+  const [roomNameInput, setRoomNameInput] = useState("");
+  const [roomCodeInput, setRoomCodeInput] = useState("");
+  const [copiedCode, setCopiedCode] = useState(false);
+
+  // Trips state
   const [trips, setTrips] = useState([]);
   const [selectedTrip, setSelectedTrip] = useState(null);
   const [currentTab, setCurrentTab] = useState("itinerary");
@@ -43,7 +61,7 @@ function App() {
   const [sortBy, setSortBy] = useState("votes");
   const [showAddModal, setShowAddModal] = useState(false);
 
-  // Forms
+  // Forms for Trips and details
   const [tripForm, setTripForm] = useState({
     owner: "",
     name: "",
@@ -67,9 +85,37 @@ function App() {
   const [suggestionForm, setSuggestionForm] = useState({ category: "Atrakcja", name: "", description: "", link: "", suggestedBy: "" });
   const [checklistForm, setChecklistForm] = useState({ task: "", assignee: "" });
 
+  // Custom fetch wrapping to inject JWT headers and handle session expiry
+  const apiFetch = (path, options = {}) => {
+    const headers = {
+      "Content-Type": "application/json",
+      ...(token ? { "Authorization": `Bearer ${token}` } : {}),
+      ...options.headers
+    };
+    return fetch(`http://localhost:5000${path}`, { ...options, headers })
+      .then(res => {
+        if (res.status === 401 || res.status === 403) {
+          handleLogout();
+          throw new Error("Sesja wygasła. Zaloguj się ponownie.");
+        }
+        return res;
+      });
+  };
+
   useEffect(() => {
-    loadTrips();
-  }, []);
+    if (token) {
+      loadRooms();
+    }
+  }, [token]);
+
+  useEffect(() => {
+    if (selectedRoom) {
+      loadTrips();
+    } else {
+      setTrips([]);
+      setSelectedTrip(null);
+    }
+  }, [selectedRoom]);
 
   useEffect(() => {
     if (selectedTrip) {
@@ -77,46 +123,132 @@ function App() {
     }
   }, [selectedTrip]);
 
-  const loadTrips = () => {
-    fetch("http://localhost:5000/api/trips")
-      .then(res => res.json())
-      .then(data => setTrips(data))
-      .catch(err => console.error("Error loading trips:", err));
+  // Auth Operations
+  const handleAuthChange = (e) => {
+    setAuthForm({ ...authForm, [e.target.name]: e.target.value });
   };
 
-  const loadTripDetails = (tripId) => {
-    // Load Itinerary
-    fetch(`http://localhost:5000/api/trips/${tripId}/itinerary`)
-      .then(res => res.json())
-      .then(data => setItinerary(data));
+  const handleAuthSubmit = (e) => {
+    e.preventDefault();
+    setAuthError("");
+    const path = authMode === "login" ? "/api/auth/login" : "/api/auth/register";
 
-    // Load Expenses
-    fetch(`http://localhost:5000/api/trips/${tripId}/expenses`)
-      .then(res => res.json())
-      .then(data => setExpenses(data));
+    fetch(`http://localhost:5000${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(authForm)
+    })
+      .then(res => res.json().then(data => ({ status: res.status, data })))
+      .then(({ status, data }) => {
+        if (status >= 400) {
+          setAuthError(data.message || "Wystąpił błąd autoryzacji");
+        } else {
+          localStorage.setItem("tp_token", data.token);
+          localStorage.setItem("tp_user", JSON.stringify(data.user));
+          setToken(data.token);
+          setUser(data.user);
+          setAuthForm({ username: "", password: "" });
+        }
+      })
+      .catch(err => {
+        setAuthError("Nie można połączyć się z serwerem.");
+        console.error(err);
+      });
+  };
 
-    // Load Suggestions
-    fetch(`http://localhost:5000/api/trips/${tripId}/suggestions`)
-      .then(res => res.json())
-      .then(data => setSuggestions(data));
+  const handleLogout = () => {
+    localStorage.removeItem("tp_token");
+    localStorage.removeItem("tp_user");
+    setToken(null);
+    setUser(null);
+    setRooms([]);
+    setSelectedRoom(null);
+    setSelectedTrip(null);
+  };
 
-    // Load Checklist
-    fetch(`http://localhost:5000/api/trips/${tripId}/checklist`)
+  // Rooms Operations
+  const loadRooms = () => {
+    apiFetch("/api/rooms")
       .then(res => res.json())
-      .then(data => setChecklist(data));
+      .then(data => setRooms(data))
+      .catch(err => console.error("Error loading rooms:", err));
+  };
+
+  const handleCreateRoom = (e) => {
+    e.preventDefault();
+    if (!roomNameInput) return;
+
+    apiFetch("/api/rooms", {
+      method: "POST",
+      body: JSON.stringify({ name: roomNameInput })
+    })
+      .then(res => res.json())
+      .then(newRoom => {
+        setRoomNameInput("");
+        loadRooms();
+        setSelectedRoom(newRoom);
+      })
+      .catch(err => console.error(err));
+  };
+
+  const handleJoinRoom = (e) => {
+    e.preventDefault();
+    if (!roomCodeInput) return;
+
+    apiFetch("/api/rooms/join", {
+      method: "POST",
+      body: JSON.stringify({ code: roomCodeInput })
+    })
+      .then(res => {
+        if (res.status === 404) {
+          alert("Pokój o podanym kodzie nie istnieje.");
+          return null;
+        }
+        return res.json();
+      })
+      .then(joinedRoom => {
+        if (joinedRoom) {
+          setRoomCodeInput("");
+          loadRooms();
+          setSelectedRoom(joinedRoom);
+        }
+      })
+      .catch(err => console.error(err));
+  };
+
+  const copyRoomCode = () => {
+    if (selectedRoom) {
+      navigator.clipboard.writeText(selectedRoom.code);
+      setCopiedCode(true);
+      setTimeout(() => setCopiedCode(false), 2000);
+    }
   };
 
   // Trips CRUD
+  const loadTrips = () => {
+    if (!selectedRoom) return;
+    apiFetch(`/api/trips?roomId=${selectedRoom.id}`)
+      .then(res => res.json())
+      .then(data => setTrips(data))
+      .catch(err => console.error(err));
+  };
+
+  const loadTripDetails = (tripId) => {
+    apiFetch(`/api/trips/${tripId}/itinerary`).then(res => res.json()).then(data => setItinerary(data));
+    apiFetch(`/api/trips/${tripId}/expenses`).then(res => res.json()).then(data => setExpenses(data));
+    apiFetch(`/api/trips/${tripId}/suggestions`).then(res => res.json()).then(data => setSuggestions(data));
+    apiFetch(`/api/trips/${tripId}/checklist`).then(res => res.json()).then(data => setChecklist(data));
+  };
+
   const handleTripChange = (e) => {
     setTripForm({ ...tripForm, [e.target.name]: e.target.value });
   };
 
   const handleAddTrip = (e) => {
     e.preventDefault();
-    fetch("http://localhost:5000/api/trips", {
+    apiFetch("/api/trips", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(tripForm)
+      body: JSON.stringify({ ...tripForm, roomId: selectedRoom.id })
     })
       .then(res => res.json())
       .then(() => {
@@ -124,12 +256,12 @@ function App() {
         setShowAddModal(false);
         loadTrips();
       })
-      .catch(err => console.error("Error adding trip:", err));
+      .catch(err => console.error(err));
   };
 
   const handleDeleteTrip = (id, name) => {
-    if (window.confirm(`Czy na pewno chcesz usunąć podróż "${name}"? Spowoduje to usunięcie wszystkich powiązanych kosztów i planów.`)) {
-      fetch(`http://localhost:5000/api/trips/${id}`, { method: "DELETE" })
+    if (window.confirm(`Czy na pewno chcesz usunąć podróż "${name}"? Usunie to wszystkie przypisane plany i koszty.`)) {
+      apiFetch(`/api/trips/${id}`, { method: "DELETE" })
         .then(res => res.json())
         .then(() => {
           if (selectedTrip && selectedTrip.id === id) {
@@ -137,22 +269,21 @@ function App() {
           }
           loadTrips();
         })
-        .catch(err => console.error("Error deleting trip:", err));
+        .catch(err => console.error(err));
     }
   };
 
   const handleVoteTrip = (e, id) => {
     e.stopPropagation();
-    fetch(`http://localhost:5000/api/trips/${id}/vote`, { method: "PATCH" })
+    apiFetch(`/api/trips/${id}/vote`, { method: "PATCH" })
       .then(res => res.json())
-      .then(() => {
-        loadTrips();
+      .then(updatedTrip => {
+        setTrips(prev => prev.map(t => t.id === id ? updatedTrip : t));
         if (selectedTrip && selectedTrip.id === id) {
-          // Sync votes on active trip
-          setSelectedTrip(prev => ({ ...prev, votes: prev.votes + 1 }));
+          setSelectedTrip(updatedTrip);
         }
       })
-      .catch(err => console.error("Error voting:", err));
+      .catch(err => console.error(err));
   };
 
   // ==========================================
@@ -160,9 +291,8 @@ function App() {
   // ==========================================
   const handleAddItinerary = (e) => {
     e.preventDefault();
-    fetch(`http://localhost:5000/api/trips/${selectedTrip.id}/itinerary`, {
+    apiFetch(`/api/trips/${selectedTrip.id}/itinerary`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(itineraryForm)
     })
       .then(res => res.json())
@@ -173,7 +303,7 @@ function App() {
   };
 
   const handleDeleteItinerary = (id) => {
-    fetch(`http://localhost:5000/api/trips/${selectedTrip.id}/itinerary/${id}`, { method: "DELETE" })
+    apiFetch(`/api/trips/${selectedTrip.id}/itinerary/${id}`, { method: "DELETE" })
       .then(res => res.json())
       .then(() => loadTripDetails(selectedTrip.id));
   };
@@ -183,9 +313,8 @@ function App() {
   // ==========================================
   const handleAddExpense = (e) => {
     e.preventDefault();
-    fetch(`http://localhost:5000/api/trips/${selectedTrip.id}/expenses`, {
+    apiFetch(`/api/trips/${selectedTrip.id}/expenses`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(expenseForm)
     })
       .then(res => res.json())
@@ -196,7 +325,7 @@ function App() {
   };
 
   const handleDeleteExpense = (id) => {
-    fetch(`http://localhost:5000/api/trips/${selectedTrip.id}/expenses/${id}`, { method: "DELETE" })
+    apiFetch(`/api/trips/${selectedTrip.id}/expenses/${id}`, { method: "DELETE" })
       .then(res => res.json())
       .then(() => loadTripDetails(selectedTrip.id));
   };
@@ -206,9 +335,8 @@ function App() {
   // ==========================================
   const handleAddSuggestion = (e) => {
     e.preventDefault();
-    fetch(`http://localhost:5000/api/trips/${selectedTrip.id}/suggestions`, {
+    apiFetch(`/api/trips/${selectedTrip.id}/suggestions`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(suggestionForm)
     })
       .then(res => res.json())
@@ -219,13 +347,13 @@ function App() {
   };
 
   const handleDeleteSuggestion = (id) => {
-    fetch(`http://localhost:5000/api/trips/${selectedTrip.id}/suggestions/${id}`, { method: "DELETE" })
+    apiFetch(`/api/trips/${selectedTrip.id}/suggestions/${id}`, { method: "DELETE" })
       .then(res => res.json())
       .then(() => loadTripDetails(selectedTrip.id));
   };
 
   const handleVoteSuggestion = (id) => {
-    fetch(`http://localhost:5000/api/trips/${selectedTrip.id}/suggestions/${id}/vote`, { method: "PATCH" })
+    apiFetch(`/api/trips/${selectedTrip.id}/suggestions/${id}/vote`, { method: "PATCH" })
       .then(res => res.json())
       .then(() => loadTripDetails(selectedTrip.id));
   };
@@ -235,9 +363,8 @@ function App() {
   // ==========================================
   const handleAddChecklist = (e) => {
     e.preventDefault();
-    fetch(`http://localhost:5000/api/trips/${selectedTrip.id}/checklist`, {
+    apiFetch(`/api/trips/${selectedTrip.id}/checklist`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(checklistForm)
     })
       .then(res => res.json())
@@ -248,13 +375,13 @@ function App() {
   };
 
   const handleToggleChecklist = (id) => {
-    fetch(`http://localhost:5000/api/trips/${selectedTrip.id}/checklist/${id}/toggle`, { method: "PATCH" })
+    apiFetch(`/api/trips/${selectedTrip.id}/checklist/${id}/toggle`, { method: "PATCH" })
       .then(res => res.json())
       .then(() => loadTripDetails(selectedTrip.id));
   };
 
   const handleDeleteChecklist = (id) => {
-    fetch(`http://localhost:5000/api/trips/${selectedTrip.id}/checklist/${id}`, { method: "DELETE" })
+    apiFetch(`/api/trips/${selectedTrip.id}/checklist/${id}`, { method: "DELETE" })
       .then(res => res.json())
       .then(() => loadTripDetails(selectedTrip.id));
   };
@@ -270,12 +397,10 @@ function App() {
     return "progress-bar green";
   };
 
-  // Filtered lists
   const filteredExpenses = expenses.filter(exp => 
     expenseFilter === "Wszystkie" ? true : exp.category === expenseFilter
   );
 
-  // Search & Sorting of Trips
   const filteredTrips = trips.filter(trip => {
     const query = searchQuery.toLowerCase();
     return (
@@ -297,22 +422,207 @@ function App() {
     return 0;
   });
 
+  // ==========================================================================
+  // VIEW RENDER FLOW
+  // ==========================================================================
+  if (!token) {
+    /* -------------------------------------------------------------
+       1. EKRAN AUTORYZACJI (LOGOWANIE / REJESTRACJA)
+       ------------------------------------------------------------- */
+    return (
+      <div className="container" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '90vh' }}>
+        <header>
+          <h1>TravelPlanner</h1>
+          <p>Zaplanuj wspaniałą podróż grupową ze znajomymi</p>
+        </header>
+
+        <div className="auth-container">
+          <div className="auth-card glass-panel">
+            <h2>{authMode === "login" ? "Logowanie" : "Rejestracja"}</h2>
+            <p className="subtitle">Udostępniaj koszty, harmonogramy i listy zadań</p>
+
+            {authError && <div className="auth-error">{authError}</div>}
+
+            <form onSubmit={handleAuthSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div className="form-group" style={{ textAlign: 'left' }}>
+                <label>Nazwa użytkownika</label>
+                <input
+                  type="text"
+                  name="username"
+                  className="form-input"
+                  placeholder="Podaj login"
+                  value={authForm.username}
+                  onChange={handleAuthChange}
+                  required
+                />
+              </div>
+
+              <div className="form-group" style={{ textAlign: 'left' }}>
+                <label>Hasło</label>
+                <input
+                  type="password"
+                  name="password"
+                  className="form-input"
+                  placeholder="Podaj hasło"
+                  value={authForm.password}
+                  onChange={handleAuthChange}
+                  required
+                />
+              </div>
+
+              <button type="submit" className="btn-primary" style={{ justifyContent: 'center', marginTop: '10px' }}>
+                {authMode === "login" ? "Zaloguj się" : "Zarejestruj się"}
+              </button>
+            </form>
+
+            <div className="auth-toggle">
+              {authMode === "login" ? (
+                <>Nie masz jeszcze konta? <span onClick={() => { setAuthMode("register"); setAuthError(""); }}>Zarejestruj się</span></>
+              ) : (
+                <>Masz już konto? <span onClick={() => { setAuthMode("login"); setAuthError(""); }}>Zaloguj się</span></>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!selectedRoom) {
+    /* -------------------------------------------------------------
+       2. WIDOK WYBORU POKOJU (WORKSPACE SELECTION)
+       ------------------------------------------------------------- */
+    return (
+      <div className="container">
+        <div className="top-bar">
+          <span className="user-tag">👤 {user?.username}</span>
+          <button className="btn-logout" onClick={handleLogout}>Wyloguj się</button>
+        </div>
+
+        <header>
+          <h1>Moje Pokoje Podróży</h1>
+          <p>Wybierz przestrzeń podróży lub stwórz nową dla swojej ekipy</p>
+        </header>
+
+        <div className="rooms-view">
+          <h2>Twoje aktywne pokoje</h2>
+          {rooms.length > 0 ? (
+            <div className="rooms-grid">
+              {rooms.map(room => (
+                <div 
+                  key={room.id} 
+                  className="room-card glass-panel"
+                  onClick={() => setSelectedRoom(room)}
+                >
+                  <div>
+                    <h3 className="room-name">{room.name}</h3>
+                    <p className="room-info">Organizator: <strong>{room.ownerName || "Ty"}</strong></p>
+                  </div>
+                  <div className="room-info" style={{ marginTop: '15px' }}>
+                    Kod pokoju: <span className="room-code-tag">{room.code}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="glass-panel empty-state" style={{ marginBottom: '35px' }}>
+              Nie należysz jeszcze do żadnego pokoju. Stwórz pokój lub dołącz do istniejącego!
+            </div>
+          )}
+
+          <div className="rooms-actions">
+            {/* Tworzenie pokoju */}
+            <div className="room-action-box glass-panel">
+              <h3><PlusIcon /> Stwórz nowy pokój</h3>
+              <form onSubmit={handleCreateRoom} style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                <div className="form-group">
+                  <label>Nazwa pokoju</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="np. Sopot 2026 ze znajomymi"
+                    value={roomNameInput}
+                    onChange={(e) => setRoomNameInput(e.target.value)}
+                    required
+                  />
+                </div>
+                <button type="submit" className="btn-primary" style={{ justifyContent: 'center' }}>
+                  Utwórz przestrzeń
+                </button>
+              </form>
+            </div>
+
+            {/* Dołączanie do pokoju */}
+            <div className="room-action-box glass-panel">
+              <h3><KeyIcon /> Dołącz do pokoju</h3>
+              <form onSubmit={handleJoinRoom} style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                <div className="form-group">
+                  <label>Wpisz 6-cyfrowy kod pokoju</label>
+                  <input
+                    type="text"
+                    maxLength="6"
+                    className="form-input"
+                    style={{ textTransform: 'uppercase', fontFamily: 'monospace', letterSpacing: '2px', fontSize: '18px', textAlign: 'center' }}
+                    placeholder="np. AB3D5F"
+                    value={roomCodeInput}
+                    onChange={(e) => setRoomCodeInput(e.target.value)}
+                    required
+                  />
+                </div>
+                <button type="submit" className="btn-primary" style={{ justifyContent: 'center' }}>
+                  Wejdź do pokoju
+                </button>
+              </form>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  /* -------------------------------------------------------------
+     3. WIDOK PODRÓŻY WEWNĄTRZ WYBRANEGO POKOJU
+     ------------------------------------------------------------- */
   return (
     <div className="container">
-      {/* NAGŁÓWEK */}
+      {/* GÓRNY PASEK LOGOWANIA */}
+      <div className="top-bar">
+        <span className="user-tag">👤 Zalogowany: {user?.username}</span>
+        <button className="btn-back" style={{ padding: '6px 14px' }} onClick={() => setSelectedRoom(null)}>
+          Zmień pokój
+        </button>
+        <button className="btn-logout" onClick={handleLogout}>Wyloguj się</button>
+      </div>
+
       <header>
         <h1>TravelPlanner</h1>
-        <p>Zaplanuj wspaniałą podróż grupową ze znajomymi</p>
+        <p>Planowanie i organizacja podróży grupowych</p>
       </header>
 
-      {/* DASHBOARD GŁÓWNY */}
+      {/* BELKA WYBRANEGO POKOJU */}
+      <div className="room-header-bar">
+        <div className="room-title-code">
+          <h2>Pokój: {selectedRoom.name}</h2>
+          <div className="room-code-badge">
+            Kod zaproszenia: <strong>{selectedRoom.code}</strong>
+            <button className="btn-copy" onClick={copyRoomCode}>
+              {copiedCode ? "Skopiowano!" : "📋 Kopiuj kod"}
+            </button>
+          </div>
+        </div>
+        <button className="btn-back" onClick={() => setSelectedRoom(null)}>
+          <BackIcon /> Wybierz inny pokój
+        </button>
+      </div>
+
+      {/* DASHBOARD GŁÓWNY POKOJU */}
       {!selectedTrip ? (
         <>
           <div className="actions-bar">
             <div className="search-wrapper">
               <input
                 className="search-input"
-                placeholder="Wyszukaj podróż po nazwie, celu lub autorze..."
+                placeholder="Wyszukaj podróż w tym pokoju..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
@@ -336,7 +646,7 @@ function App() {
             </div>
           </div>
 
-          {/* LISTA KART PODRÓŻY */}
+          {/* LISTA PODRÓŻY W POKOJU */}
           {sortedTrips.length > 0 ? (
             <div className="trips-grid">
               {sortedTrips.map((trip, idx) => (
@@ -373,7 +683,10 @@ function App() {
 
                   <div className="trip-card-footer" onClick={(e) => e.stopPropagation()}>
                     <div className="votes-counter">
-                      <button className="btn-vote" onClick={(e) => handleVoteTrip(e, trip.id)}>
+                      <button 
+                        className={`btn-vote ${trip.hasVoted ? "active" : ""}`} 
+                        onClick={(e) => handleVoteTrip(e, trip.id)}
+                      >
                         <ThumbIcon />
                       </button>
                       <span>{trip.votes} głosów</span>
@@ -401,8 +714,8 @@ function App() {
             </div>
           ) : (
             <div className="glass-panel empty-state" style={{ padding: '60px 20px' }}>
-              <p>Nie znaleziono żadnych planowanych wyjazdów.</p>
-              <button className="btn-primary" style={{ margin: '0 auto' }} onClick={() => setShowAddModal(true)}>
+              <p>W tym pokoju nie ma jeszcze żadnych podróży.</p>
+              <button className="btn-primary" style={{ margin: '20px auto 0 auto' }} onClick={() => setShowAddModal(true)}>
                 Stwórz pierwszą podróż
               </button>
             </div>
@@ -410,7 +723,7 @@ function App() {
         </>
       ) : (
         /* ==========================================================================
-           SZCZEGÓŁOWY PANEL PODRÓŻY (DASHBOARD WYJAZDU)
+           SZCZEGÓŁOWY PANEL PODRÓŻY W WYBRANYM POKOJU
            ========================================================================== */
         <div className="trip-dashboard">
           <div className="dashboard-header">
@@ -555,7 +868,7 @@ function App() {
                         <textarea 
                           className="form-input" 
                           style={{ minHeight: '60px' }}
-                          placeholder="np. Bilety kupić przez internet z wyprzedzeniem..." 
+                          placeholder="np. Kupić bilety online z wyprzedzeniem..." 
                           value={itineraryForm.description} 
                           onChange={(e) => setItineraryForm({ ...itineraryForm, description: e.target.value })}
                         />
@@ -689,11 +1002,11 @@ function App() {
                         />
                       </div>
                       <div className="form-group">
-                        <label>Kto płacił?</label>
+                        <label>Kto płacił? (opcjonalnie)</label>
                         <input 
                           type="text" 
                           className="form-input" 
-                          placeholder="np. Tomek" 
+                          placeholder="np. Tomek (domyślnie Ty)" 
                           value={expenseForm.payer} 
                           onChange={(e) => setExpenseForm({ ...expenseForm, payer: e.target.value })}
                         />
@@ -744,7 +1057,10 @@ function App() {
 
                             <div className="suggestion-footer">
                               <div className="votes-counter">
-                                <button className="btn-vote" onClick={() => handleVoteSuggestion(sugg.id)}>
+                                <button 
+                                  className={`btn-vote ${sugg.hasVoted ? "active" : ""}`} 
+                                  onClick={() => handleVoteSuggestion(sugg.id)}
+                                >
                                   <ThumbIcon />
                                 </button>
                                 <span>{sugg.votes} głosów</span>
@@ -755,7 +1071,7 @@ function App() {
                       </div>
                     ) : (
                       <div className="empty-state">
-                        <p>Brak zgłoszonych propozycji. Zaproponuj hotel, restaurację lub klub w pobliżu!</p>
+                        <p>Brak zgłoszonych propozycji. Zaproponuj nocleg lub restaurację znajomym!</p>
                       </div>
                     )}
                   </div>
@@ -799,21 +1115,21 @@ function App() {
                         />
                       </div>
                       <div className="form-group">
-                        <label>Twoje Imię</label>
+                        <label>Twoje Imię (opcjonalnie)</label>
                         <input 
                           type="text" 
                           className="form-input" 
-                          placeholder="np. Ania" 
+                          placeholder="np. Ania (domyślnie Ty)" 
                           value={suggestionForm.suggestedBy} 
                           onChange={(e) => setSuggestionForm({ ...suggestionForm, suggestedBy: e.target.value })}
                         />
                       </div>
                       <div className="form-group">
-                        <label>Dlaczego polecasz to miejsce?</label>
+                        <label>Opis / Rekomendacja</label>
                         <textarea 
                           className="form-input" 
                           style={{ minHeight: '60px' }}
-                          placeholder="np. Blisko centrum, świetne recenzje na Google Maps, śniadanie w cenie..." 
+                          placeholder="Dlaczego polecasz to miejsce?" 
                           value={suggestionForm.description} 
                           onChange={(e) => setSuggestionForm({ ...suggestionForm, description: e.target.value })}
                         />
@@ -855,7 +1171,7 @@ function App() {
                     </div>
                   ) : (
                     <div className="empty-state">
-                      <p>Brak zadań na liście. Dodaj zadania takie jak "Zakup ubezpieczenia", "Spakowanie ładowarek".</p>
+                      <p>Brak zadań na liście. Dodaj zadania takie jak "Kupić ubezpieczenie" czy "Spakować dokumenty".</p>
                     </div>
                   )}
                 </div>
@@ -913,7 +1229,7 @@ function App() {
                   <input
                     name="owner"
                     className="form-input"
-                    placeholder="np. Robert"
+                    placeholder="np. Robert (domyślnie Ty)"
                     value={tripForm.owner}
                     onChange={handleTripChange}
                   />

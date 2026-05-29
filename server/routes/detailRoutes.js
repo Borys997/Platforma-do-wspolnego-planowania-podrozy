@@ -1,6 +1,10 @@
 const express = require("express");
 const router = express.Router({ mergeParams: true });
 const detailController = require("../controllers/detailController");
+const authMiddleware = require("../middleware/authMiddleware");
+
+// Wszystkie trasy szczegółowe wymagają zalogowania
+router.use(authMiddleware);
 
 // Plan podróży (Itinerary)
 router.get("/:tripId/itinerary", detailController.getItinerary);

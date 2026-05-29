@@ -3,6 +3,8 @@ const cors = require("cors");
 require("dotenv").config();
 
 const { initDb } = require("./config/db");
+const authRoutes = require("./routes/authRoutes");
+const roomRoutes = require("./routes/roomRoutes");
 const tripRoutes = require("./routes/tripRoutes");
 const detailRoutes = require("./routes/detailRoutes");
 
@@ -16,6 +18,8 @@ app.get("/", (req, res) => {
 });
 
 // Podłączenie tras
+app.use("/api/auth", authRoutes);
+app.use("/api/rooms", roomRoutes);
 app.use("/api/trips", tripRoutes);
 app.use("/api/trips", detailRoutes);
 
